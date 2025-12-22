@@ -42,7 +42,9 @@ object SupabaseFavoritesHelper {
                         sellerImage = post.profiles?.avatar ?: "",
                         category = post.category,
                         condition = post.condition,
-                        ownerId = post.owner_id ?: ""
+                        ownerId = post.owner_id ?: "",
+                        type = post.type,
+                        budgetRange = post.budget_range // 👈 Map budgetRange
                     )
                 }
             } catch (e: Exception) {

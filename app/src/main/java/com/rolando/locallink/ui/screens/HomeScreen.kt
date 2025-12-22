@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavHostController
 import com.rolando.locallink.R
+import com.rolando.locallink.utils.CategoryUtils
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -55,14 +56,14 @@ fun HomeScreen(
     favoriteItems: MutableList<ItemModel>,
     totalUnread: Int = 0
 ) {
-    val context = LocalContext.current // 👈 Context is captured here
+    val context = LocalContext.current
 
     // Search & Filter State
     var searchQuery by rememberSaveable { mutableStateOf("") }
     var selectedCategory by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedType by rememberSaveable { mutableStateOf("sell") }
 
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
-
     var posts by remember { mutableStateOf<List<PostModel>>(emptyList()) }
     var isRefreshing by remember { mutableStateOf(false) }
 
@@ -70,19 +71,30 @@ fun HomeScreen(
     val isDark = isSystemInDarkTheme()
     val logoPainter = painterResource(id = if (isDark) R.drawable.darklogo else R.drawable.lightlogo)
 
+    // Listen for Category Selection from CategoryScreen
+    val categoryResult = navController.currentBackStackEntry
+        ?.savedStateHandle
+        ?.getLiveData<String>("selected_category")
+        ?.observeAsState()
+
+    LaunchedEffect(categoryResult?.value) {
+        if (categoryResult?.value != null) {
+            selectedCategory = categoryResult.value
+            navController.currentBackStackEntry?.savedStateHandle?.remove<String>("selected_category")
+        }
+    }
+
     // Refresh Logic
     fun refreshPosts(force: Boolean = false, showLoading: Boolean = true) {
         coroutineScope.launch {
             if (showLoading) isRefreshing = true
             try {
                 val fetchedPosts = if (searchQuery.isNotBlank() || selectedCategory != null) {
-                    SupabasePostHelper.searchPosts(searchQuery, selectedCategory)
+                    SupabasePostHelper.searchPosts(searchQuery, selectedCategory, type = selectedType)
                 } else {
-                    SupabasePostHelper.getPosts()
+                    SupabasePostHelper.getPosts(type = selectedType)
                 }
-
                 posts = fetchedPosts
-
                 if (searchQuery.isBlank() && selectedCategory == null) {
                     PostCacheManager.savePosts(context, fetchedPosts)
                 }
@@ -94,18 +106,14 @@ fun HomeScreen(
         }
     }
 
-    LaunchedEffect(searchQuery, selectedCategory) {
-        if (searchQuery.isNotBlank()) {
-            delay(500)
-        }
+    LaunchedEffect(searchQuery, selectedCategory, selectedType) {
+        if (searchQuery.isNotBlank()) delay(500)
         refreshPosts(force = true, showLoading = false)
     }
 
     LaunchedEffect(Unit) {
         val cachedPosts = PostCacheManager.loadPosts(context)
-        if (cachedPosts.isNotEmpty()) {
-            posts = cachedPosts
-        }
+        if (cachedPosts.isNotEmpty()) posts = cachedPosts
         if (cachedPosts.isEmpty() || PostCacheManager.isCacheExpired(context)) {
             refreshPosts(force = true, showLoading = true)
         }
@@ -139,28 +147,37 @@ fun HomeScreen(
                         }
                     },
                     actions = {
-                        IconButton(onClick = {navController.navigate("notifications")})
-                        { Icon(Icons.Default.Notifications, "Notifications") }
+                        IconButton(onClick = {navController.navigate("notifications")}) {
+                            Icon(Icons.Default.Notifications, "Notifications")
+                        }
                     },
-                    navigationIcon = { IconButton(onClick = {}) {
-                        Icon(
-                            painter = logoPainter,
-                            contentDescription = "App Logo",
-                            tint = Color.Unspecified,
-                            modifier = Modifier.size(28.dp)
-                        )
-                    } },
+                    navigationIcon = {
+                        IconButton(onClick = {}) {
+                            Icon(painter = logoPainter, contentDescription = "App Logo", tint = Color.Unspecified, modifier = Modifier.size(28.dp))
+                        }
+                    },
                     scrollBehavior = scrollBehavior,
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background)
                 )
             }
         },
         bottomBar = {
-            CompactBottomBar(
-                selectedTab = selectedTab,
-                onTabSelected = { selectedTab = it },
-                totalUnread = totalUnread
-            )
+            CompactBottomBar(selectedTab = selectedTab, onTabSelected = { selectedTab = it }, totalUnread = totalUnread)
+        },
+        floatingActionButton = {
+            if (selectedTab == 0) {
+                FloatingActionButton(
+                    onClick = { navController.navigate("createPost") },
+                    containerColor = Color(0xFF3B82F6),
+                    contentColor = Color.White,
+                    shape = CircleShape
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Add,
+                        contentDescription = "Create Post"
+                    )
+                }
+            }
         },
         modifier = nestedScrollModifier,
         containerColor = MaterialTheme.colorScheme.background,
@@ -168,11 +185,12 @@ fun HomeScreen(
             Box(modifier = Modifier.padding(paddingValues)) {
                 when (selectedTab) {
                     0 -> HomeContentShrinkSearch(
-                        navController = navController,
                         searchQuery = searchQuery,
                         onSearchChange = { searchQuery = it },
                         selectedCategory = selectedCategory,
                         onCategorySelected = { selectedCategory = it },
+                        selectedType = selectedType,
+                        onTypeSelected = { selectedType = it },
                         favoriteItems = favoriteItems,
                         onToggleFavorite = { item ->
                             if (favoriteItems.any { it.id == item.id }) {
@@ -180,40 +198,20 @@ fun HomeScreen(
                                 coroutineScope.launch { SupabaseFavoritesHelper.removeFavorite(userId, item.id) }
                             } else {
                                 favoriteItems.add(item)
-                                coroutineScope.launch {
-                                    // 👇 FIXED: Passed 'context' as the first argument
-                                    SupabaseFavoritesHelper.addFavorite(context, userId, item.id)
-                                }
+                                coroutineScope.launch { SupabaseFavoritesHelper.addFavorite(context, userId, item.id) }
                             }
                         },
                         onItemClick = { clickedItem -> navController.navigate("details/${clickedItem.id}") },
                         posts = posts,
                         isRefreshing = isRefreshing,
-                        onRefresh = { refreshPosts(force = true, showLoading = true) }
+                        onRefresh = { refreshPosts(force = true, showLoading = true) },
+                        onSeeMoreCategories = { navController.navigate("categories") }
                     )
-                    1 -> FavoritesContent(
-                        favorites = favoriteItems,
-                        onToggleFavorite = { item ->
-                            favoriteItems.removeAll { it.id == item.id }
-                            coroutineScope.launch { SupabaseFavoritesHelper.removeFavorite(userId, item.id) }
-                        },
-                        navController = navController
-                    )
+                    1 -> FavoritesContent(favoriteItems, { item -> favoriteItems.removeAll { it.id == item.id }; coroutineScope.launch { SupabaseFavoritesHelper.removeFavorite(userId, item.id) } }, navController)
                     2 -> MessagesScreen(navController = navController, currentUserId = userId)
-                    3 -> ProfileContent(
-                        navController = navController,
-                        profile = profile,
-                        userId = userId,
-                        onEditProfile = { navController.navigate("editProfile") },
-                        onLogout = {
-                            coroutineScope.launch {
-                                SupabaseAuthHelper.logout()
-                                navController.navigate("login") {
-                                    popUpTo(navController.graph.id) { inclusive = true }
-                                }
-                            }
-                        }
-                    )
+                    3 -> ProfileContent(navController, profile, userId, { navController.navigate("editProfile") }, {
+                        coroutineScope.launch { SupabaseAuthHelper.logout(); navController.navigate("login") { popUpTo(navController.graph.id) { inclusive = true } } }
+                    })
                 }
             }
         }
@@ -223,34 +221,31 @@ fun HomeScreen(
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun HomeContentShrinkSearch(
-    navController: NavHostController,
     searchQuery: String,
     onSearchChange: (String) -> Unit,
     selectedCategory: String?,
     onCategorySelected: (String?) -> Unit,
+    selectedType: String,
+    onTypeSelected: (String) -> Unit,
     favoriteItems: List<ItemModel>,
     onToggleFavorite: (ItemModel) -> Unit,
     onItemClick: (ItemModel) -> Unit,
     posts: List<PostModel>,
     isRefreshing: Boolean,
-    onRefresh: () -> Unit
+    onRefresh: () -> Unit,
+    onSeeMoreCategories: () -> Unit
 ) {
     val scrollState = rememberLazyListState()
-    val headerHeightPx = with(LocalDensity.current) { 160.dp.toPx() }
+    val headerHeightPx = with(LocalDensity.current) { 100.dp.toPx() }
     var isShrunk by remember { mutableStateOf(false) }
-
     val focusManager = LocalFocusManager.current
     val isDark = isSystemInDarkTheme()
     val logoPainter = painterResource(id = if (isDark) R.drawable.darklogo else R.drawable.lightlogo)
 
-    if (scrollState.isScrollInProgress) {
-        LaunchedEffect(Unit) {
-            focusManager.clearFocus()
-        }
-    }
-
-    BackHandler(enabled = searchQuery.isNotEmpty()) {
-        onSearchChange("")
+    if (scrollState.isScrollInProgress) LaunchedEffect(Unit) { focusManager.clearFocus() }
+    BackHandler(enabled = searchQuery.isNotEmpty() || selectedCategory != null) {
+        if (searchQuery.isNotEmpty()) onSearchChange("")
+        if (selectedCategory != null) onCategorySelected(null)
         focusManager.clearFocus()
     }
 
@@ -263,11 +258,13 @@ fun HomeContentShrinkSearch(
                 imageUrl = post.images?.firstOrNull() ?: "",
                 images = post.images ?: emptyList(),
                 description = post.description,
-                sellerName = post.profiles?.name ?: "Unknown Seller",
+                sellerName = post.profiles?.name ?: "Unknown",
                 sellerImage = post.profiles?.avatar ?: "",
                 category = post.category,
                 condition = post.condition,
-                ownerId = post.owner_id ?: ""
+                ownerId = post.owner_id ?: "",
+                type = post.type,
+                budgetRange = post.budget_range // 👈 Map budgetRange
             )
         }
     }
@@ -279,256 +276,197 @@ fun HomeContentShrinkSearch(
         isShrunk = totalScroll > headerHeightPx * 0.1f
     }
 
-    PullToRefreshBox(
-        isRefreshing = isRefreshing,
-        onRefresh = onRefresh,
-        modifier = Modifier.fillMaxSize()
-    ) {
-        LazyColumn(
-            state = scrollState,
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(8.dp)
-        ) {
+    PullToRefreshBox(isRefreshing = isRefreshing, onRefresh = onRefresh, modifier = Modifier.fillMaxSize()) {
+        LazyColumn(state = scrollState, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(8.dp)) {
+
+            // Sticky Header (Search + Type Toggle Only)
             stickyHeader {
-                Column(modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background.copy(0.9f))) {
+                Column(modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background.copy(0.95f))) {
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 8.dp)) {
-                        AnimatedVisibility(isShrunk) { IconButton(onClick = {}) {
-                            Icon(
-                                painter = logoPainter,
-                                contentDescription = "App Logo",
-                                tint = Color.Unspecified,
-                                modifier = Modifier.size(28.dp)
-                            )
-                        } }
+                        AnimatedVisibility(isShrunk) { IconButton(onClick = {}) { Icon(painter = logoPainter, contentDescription = null, tint = Color.Unspecified, modifier = Modifier.size(28.dp)) } }
                         Spacer(Modifier.width(4.dp))
                         Box(modifier = Modifier.weight(searchBarFraction)) {
                             TextField(
-                                value = searchQuery,
-                                onValueChange = onSearchChange,
-                                placeholder = { Text("Search...") },
+                                value = searchQuery, onValueChange = onSearchChange, placeholder = { Text("Search...") },
                                 leadingIcon = { Icon(Icons.Default.Search, null) },
-                                trailingIcon = {
-                                    if (searchQuery.isNotEmpty()) {
-                                        IconButton(onClick = {
-                                            onSearchChange("")
-                                            focusManager.clearFocus()
-                                        }) {
-                                            Icon(Icons.Default.Close, contentDescription = "Clear")
-                                        }
-                                    }
-                                },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(20.dp))
-                                    .background(MaterialTheme.colorScheme.surfaceVariant),
-                                colors = TextFieldDefaults.colors(
-                                    focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                                    focusedIndicatorColor = Color.Transparent,
-                                    unfocusedIndicatorColor = Color.Transparent
-                                ),
-                                singleLine = true,
-                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                                keyboardActions = KeyboardActions(
-                                    onSearch = { focusManager.clearFocus() }
-                                )
+                                trailingIcon = { if (searchQuery.isNotEmpty()) IconButton(onClick = { onSearchChange(""); focusManager.clearFocus() }) { Icon(Icons.Default.Close, null) } },
+                                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(MaterialTheme.colorScheme.surfaceVariant),
+                                colors = TextFieldDefaults.colors(focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant, unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant, focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent),
+                                singleLine = true, keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search), keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() })
                             )
                         }
                         Spacer(Modifier.width(4.dp))
-                        AnimatedVisibility(isShrunk) { IconButton(onClick = {navController.navigate("notifications")}) { Icon(Icons.Default.Notifications, null) } }
+                        AnimatedVisibility(isShrunk) { IconButton(onClick = {}) { Icon(Icons.Default.Notifications, null) } }
                     }
-                    CategoryRow(selectedCategory, onCategorySelected)
-                    Spacer(Modifier.height(8.dp))
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilterChip(
+                            selected = selectedType == "sell",
+                            onClick = { onTypeSelected("sell") },
+                            label = { Text("For Sale", fontSize = 12.sp) },
+                            leadingIcon = { if (selectedType == "sell") Icon(Icons.Default.Check, null, modifier = Modifier.size(14.dp)) },
+                            modifier = Modifier.height(32.dp),
+                            shape = CircleShape,
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = Color(0xFF3B82F6),
+                                selectedLabelColor = Color.White,
+                                selectedLeadingIconColor = Color.White,
+                                containerColor = Color.LightGray.copy(alpha = 0.3f),
+                                labelColor = if (isDark) Color.White else Color.Black // 👈 UPDATED: Dynamic Text Color
+                            ),
+                            border = FilterChipDefaults.filterChipBorder(enabled = true, selected = selectedType == "sell", borderColor = Color.Transparent)
+                        )
+                        FilterChip(
+                            selected = selectedType == "buy",
+                            onClick = { onTypeSelected("buy") },
+                            label = { Text("Looking For", fontSize = 12.sp) },
+                            leadingIcon = { if (selectedType == "buy") Icon(Icons.Default.Check, null, modifier = Modifier.size(14.dp)) },
+                            modifier = Modifier.height(32.dp),
+                            shape = CircleShape,
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = Color(0xFF3B82F6),
+                                selectedLabelColor = Color.White,
+                                selectedLeadingIconColor = Color.White,
+                                containerColor = Color.LightGray.copy(alpha = 0.3f),
+                                labelColor = if (isDark) Color.White else Color.Black // 👈 UPDATED: Dynamic Text Color
+                            ),
+                            border = FilterChipDefaults.filterChipBorder(enabled = true, selected = selectedType == "buy", borderColor = Color.Transparent)
+                        )
+                    }
+                    Spacer(Modifier.height(4.dp))
                 }
             }
 
-            items(
-                items = displayItems,
-                key = { it.id }
-            ) { item ->
-                ItemCard(
-                    item = item,
-                    isFavorite = favoriteItems.any { it.id == item.id },
-                    onToggleFavorite = { onToggleFavorite(item) },
-                    onItemClick = { onItemClick(item) },
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
+            // Categories Grid
+            item {
+                if (selectedCategory == null) {
+                    Text("Categories", fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp))
+                    HomeCategoryGrid(
+                        onCategoryClick = { onCategorySelected(it) },
+                        onSeeMoreClick = onSeeMoreCategories
+                    )
+                    Spacer(Modifier.height(16.dp))
+                } else {
+                    Row(Modifier.padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Category: ", color = Color.Gray)
+                        InputChip(
+                            selected = true,
+                            onClick = { onCategorySelected(null) },
+                            label = { Text(selectedCategory) },
+                            trailingIcon = { Icon(Icons.Default.Close, null) }
+                        )
+                    }
+                }
+            }
+
+            // Listings Header
+            item {
+                Text(
+                    text = "Listings",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                 )
+            }
+
+            // Post Items
+            items(items = displayItems, key = { it.id }) { item ->
+                ItemCard(item = item, isFavorite = favoriteItems.any { it.id == item.id }, onToggleFavorite = { onToggleFavorite(item) }, onItemClick = { onItemClick(item) }, modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp))
             }
         }
     }
 }
 
-// ... (Rest of CategoryRow, CategoryChip, CompactBottomBar, etc. remain unchanged) ...
 @Composable
-fun CategoryRow(
-    selectedCategory: String?,
-    onCategorySelected: (String?) -> Unit
+fun HomeCategoryGrid(
+    onCategoryClick: (String) -> Unit,
+    onSeeMoreClick: () -> Unit
 ) {
-    LazyRow(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        contentPadding = PaddingValues(horizontal = 4.dp)
-    ) {
-        item {
-            CategoryChip(
-                text = "All",
-                selected = selectedCategory == null,
-                onClick = { onCategorySelected(null) }
-            )
+    val displayCats = CategoryUtils.categories.take(3)
+
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp)) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            HomeCategoryCard(category = displayCats[0], onClick = { onCategoryClick(displayCats[0]) }, modifier = Modifier.weight(1f))
+            HomeCategoryCard(category = displayCats[1], onClick = { onCategoryClick(displayCats[1]) }, modifier = Modifier.weight(1f))
         }
-        items(categoryList) { category ->
-            CategoryChip(
-                text = category,
-                selected = selectedCategory == category,
-                onClick = { onCategorySelected(category) }
-            )
+        Spacer(Modifier.height(8.dp))
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            HomeCategoryCard(category = displayCats[2], onClick = { onCategoryClick(displayCats[2]) }, modifier = Modifier.weight(1f))
+            Card(
+                modifier = Modifier.weight(1f).height(80.dp).clickable { onSeeMoreClick() },
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f))
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Icon(Icons.Default.ArrowForward, null, tint = MaterialTheme.colorScheme.primary)
+                    Text("See More", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                }
+            }
         }
     }
 }
 
-val categoryList = listOf(
-    "Gadgets", "Clothes", "Art", "Vehicles", "Furniture", "Books", "Accessories", "Others"
-)
-
 @Composable
-fun CategoryChip(text: String, selected: Boolean, onClick: () -> Unit) {
-    Surface(
-        color = if (selected) Color(0xFF3B82F6) else MaterialTheme.colorScheme.background.copy(alpha = 0.3f),
-        shape = RoundedCornerShape(18.dp),
-        border = if (!selected) BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)) else null,
-        modifier = Modifier.clip(RoundedCornerShape(18.dp)).clickable { onClick() }
+fun HomeCategoryCard(category: String, onClick: () -> Unit, modifier: Modifier) {
+    Card(
+        modifier = modifier.height(80.dp).clickable { onClick() },
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
     ) {
-        Text(
-            text = text,
-            color = if (selected) Color(0xFFFFFFFF) else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-            fontSize = 14.sp
-        )
-    }
-}
-
-@Composable
-fun CompactBottomBar(
-    selectedTab: Int,
-    onTabSelected: (Int) -> Unit,
-    totalUnread: Int
-) {
-    Surface(
-        color = MaterialTheme.colorScheme.background,
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(58.dp)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 10.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-
-            BottomItem(
-                label = "Home",
-                selectedIcon = Icons.Filled.Home,
-                unselectedIcon = Icons.Outlined.Home,
-                selected = selectedTab == 0,
-                onClick = { onTabSelected(0) }
-            )
-
-            BottomItem(
-                label = "Favorites",
-                selectedIcon = Icons.Filled.Favorite,
-                unselectedIcon = Icons.Outlined.Favorite,
-                selected = selectedTab == 1,
-                onClick = { onTabSelected(1) }
-            )
-
-            BottomItemWithBadge(
-                label = "Messages",
-                selectedIcon = Icons.Filled.Mail,
-                unselectedIcon = Icons.Outlined.Mail,
-                selected = selectedTab == 2,
-                unreadCount = totalUnread,
-                onClick = { onTabSelected(2) }
-            )
-
-            BottomItem(
-                label = "Profile",
-                selectedIcon = Icons.Filled.Person,
-                unselectedIcon = Icons.Outlined.Person,
-                selected = selectedTab == 3,
-                onClick = { onTabSelected(3) }
-            )
-        }
-    }
-}
-
-@Composable
-fun BottomItemWithBadge(
-    label: String,
-    selectedIcon: ImageVector,
-    unselectedIcon: ImageVector,
-    selected: Boolean,
-    unreadCount: Int,
-    onClick: () -> Unit
-) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier
-            .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp)
-    ) {
-        Box {
             Icon(
-                imageVector = if (selected) selectedIcon else unselectedIcon,
-                contentDescription = label,
-                tint = if (selected) MaterialTheme.colorScheme.onBackground else Color.Gray,
-                modifier = Modifier.size(22.dp)
+                CategoryUtils.getIconForCategory(category),
+                null,
+                modifier = Modifier.size(24.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
-
-            if (unreadCount > 0) {
-                Box(
-                    modifier = Modifier
-                        .size(10.dp)
-                        .background(Color.Red, CircleShape)
-                        .align(Alignment.TopEnd)
-                )
-            }
+            Spacer(Modifier.height(4.dp))
+            Text(category, fontSize = 12.sp, fontWeight = FontWeight.Medium)
         }
-
-        Text(
-            text = label,
-            fontSize = 11.sp,
-            color = if (selected) MaterialTheme.colorScheme.onBackground else Color.Gray
-        )
     }
 }
 
 @Composable
-fun BottomItem(
-    label: String,
-    selectedIcon: ImageVector,
-    unselectedIcon: ImageVector,
-    selected: Boolean,
-    onClick: () -> Unit
-) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier
-            .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp)
-    ) {
-        Icon(
-            imageVector = if (selected) selectedIcon else unselectedIcon,
-            contentDescription = label,
-            tint = if (selected) MaterialTheme.colorScheme.onBackground else Color.Gray,
-            modifier = Modifier.size(22.dp)
-        )
-        Text(
-            text = label,
-            fontSize = 11.sp,
-            color = if (selected) MaterialTheme.colorScheme.onBackground else Color.Gray
-        )
+fun CompactBottomBar(selectedTab: Int, onTabSelected: (Int) -> Unit, totalUnread: Int) {
+    Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxWidth().height(58.dp)) {
+        Row(modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+            BottomItem("Home", Icons.Filled.Home, Icons.Outlined.Home, selectedTab == 0) { onTabSelected(0) }
+            BottomItem("Favorites", Icons.Filled.Favorite, Icons.Outlined.Favorite, selectedTab == 1) { onTabSelected(1) }
+            BottomItemWithBadge("Messages", Icons.Filled.Mail, Icons.Outlined.Mail, selectedTab == 2, totalUnread) { onTabSelected(2) }
+            BottomItem("Profile", Icons.Filled.Person, Icons.Outlined.Person, selectedTab == 3) { onTabSelected(3) }
+        }
+    }
+}
+
+@Composable
+fun BottomItemWithBadge(label: String, selectedIcon: ImageVector, unselectedIcon: ImageVector, selected: Boolean, unreadCount: Int, onClick: () -> Unit) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable(onClick = onClick).padding(horizontal = 8.dp)) {
+        Box {
+            Icon(if (selected) selectedIcon else unselectedIcon, label, tint = if (selected) MaterialTheme.colorScheme.onBackground else Color.Gray, modifier = Modifier.size(22.dp))
+            if (unreadCount > 0) Box(modifier = Modifier.size(10.dp).background(Color.Red, CircleShape).align(Alignment.TopEnd))
+        }
+        Text(label, fontSize = 11.sp, color = if (selected) MaterialTheme.colorScheme.onBackground else Color.Gray)
+    }
+}
+
+@Composable
+fun BottomItem(label: String, selectedIcon: ImageVector, unselectedIcon: ImageVector, selected: Boolean, onClick: () -> Unit) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable(onClick = onClick).padding(horizontal = 8.dp)) {
+        Icon(if (selected) selectedIcon else unselectedIcon, label, tint = if (selected) MaterialTheme.colorScheme.onBackground else Color.Gray, modifier = Modifier.size(22.dp))
+        Text(label, fontSize = 11.sp, color = if (selected) MaterialTheme.colorScheme.onBackground else Color.Gray)
     }
 }
 

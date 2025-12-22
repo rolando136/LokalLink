@@ -105,6 +105,19 @@ fun AppNavGraph(navController: NavHostController) {
             }
         }
 
+        composable("categories") {
+            CategoryScreen(
+                navController = navController,
+                onCategorySelected = { category ->
+                    // Pass data back to home
+                    navController.previousBackStackEntry
+                        ?.savedStateHandle
+                        ?.set("selected_category", category)
+                    navController.popBackStack()
+                }
+            )
+        }
+
         composable("notifications") {
             NotificationScreen(
                 navController = navController,

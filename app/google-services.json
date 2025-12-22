@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1083060433336",
+    "project_id": "lokallink-dba26",
+    "storage_bucket": "lokallink-dba26.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1083060433336:android:895b727ebc5a6e015f1f4d",
+        "android_client_info": {
+          "package_name": "com.rolando.locallink"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBjniDHgbEP2WWawTsHK4mPpH6NIbGJ6Vk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

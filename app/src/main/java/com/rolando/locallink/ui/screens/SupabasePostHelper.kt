@@ -6,6 +6,12 @@ import io.github.jan.supabase.postgrest.query.Columns
 import io.github.jan.supabase.postgrest.query.Order
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+// 👇 NEW IMPORTS
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.JsonNull
 
 object SupabasePostHelper {
 
@@ -18,7 +24,7 @@ object SupabasePostHelper {
         condition: String,
         imageUrls: List<String>,
         type: String = "sell",
-        budgetRange: String? = null // 👈 Added
+        budgetRange: String? = null
     ) {
         val post = PostModel(
             title = title,
@@ -29,7 +35,7 @@ object SupabasePostHelper {
             images = imageUrls,
             owner_id = userId,
             type = type,
-            budget_range = budgetRange // 👈 Added
+            budget_range = budgetRange
         )
         withContext(Dispatchers.IO) {
             SupabaseClient.client.from("posts").insert(post)
@@ -41,7 +47,9 @@ object SupabasePostHelper {
             try {
                 SupabaseClient.client.from("posts")
                     .select(columns = Columns.list("*, profiles(*)")) {
-                        filter { eq("type", type) }
+                        filter {
+                            eq("type", type)
+                        }
                         order("created_at", order = Order.DESCENDING)
                     }
                     .decodeList<PostModel>()
@@ -59,7 +67,9 @@ object SupabasePostHelper {
                     .select(columns = Columns.list("*, profiles(*)")) {
                         filter {
                             ilike("title", "%$query%")
-                            if (category != null) eq("category", category)
+                            if (category != null) {
+                                eq("category", category)
+                            }
                             eq("type", type)
                         }
                         order("created_at", order = Order.DESCENDING)
@@ -91,10 +101,13 @@ object SupabasePostHelper {
 
     suspend fun deletePost(postId: String) {
         withContext(Dispatchers.IO) {
-            SupabaseClient.client.from("posts").delete { filter { eq("id", postId) } }
+            SupabaseClient.client.from("posts").delete {
+                filter { eq("id", postId) }
+            }
         }
     }
 
+    // 👇 FIXED: Used buildJsonObject to handle mixed types safely
     suspend fun updatePost(
         postId: String,
         title: String,
@@ -104,22 +117,29 @@ object SupabasePostHelper {
         condition: String,
         imageUrls: List<String>,
         type: String,
-        budgetRange: String? = null // 👈 Added
+        budgetRange: String? = null
     ) {
         withContext(Dispatchers.IO) {
-            val updateData = mutableMapOf(
-                "title" to title,
-                "description" to description,
-                "price" to price,
-                "category" to category,
-                "condition" to condition,
-                "images" to imageUrls,
-                "type" to type
-            )
-            // Add budget_range explicitly
-            if (budgetRange != null) updateData["budget_range"] = budgetRange
+            val json = buildJsonObject {
+                put("title", title)
+                put("description", description)
+                put("price", price)
+                put("category", category)
+                put("condition", condition)
+                putJsonArray("images") {
+                    imageUrls.forEach { add(it) }
+                }
+                put("type", type)
 
-            SupabaseClient.client.from("posts").update(updateData) {
+                // Clear budget_range if null (e.g. switched to 'sell'), otherwise set it
+                if (budgetRange == null) {
+                    put("budget_range", JsonNull)
+                } else {
+                    put("budget_range", budgetRange)
+                }
+            }
+
+            SupabaseClient.client.from("posts").update(json) {
                 filter { eq("id", postId) }
             }
         }

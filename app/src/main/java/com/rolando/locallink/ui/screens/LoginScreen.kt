@@ -153,6 +153,10 @@ fun LoginScreen(
                 },
                 enabled = !isLoading,
                 modifier = Modifier.fillMaxWidth().height(50.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF3B82F6),
+                    contentColor = Color.White
+                ),
                 shape = RoundedCornerShape(18.dp)
             ) {
                 if (isLoading) {
